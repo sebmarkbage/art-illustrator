@@ -1,0 +1,251 @@
+﻿#include "ART.Illustrator.jsxinc"
+#include "assets/art-script.jsxinc"
+
+Illustrator = {};
+
+Illustrator.ART = new Class({
+	
+	initialize: function(options){
+		var coords = (options && options.coordinateSpace) || [0, 0, 0, 0];
+		var xo = coords[0], yo = coords[1],
+			xm = xo < coords[2] ? 1 : -1,
+			ym = yo < coords[3] ? 1 : -1;
+		this.alignX = function(x){ return (-xo + x) * xm; };
+		this.alignY = function(y){ return (-yo + y) * ym; };
+		this.art = (options && options.mode) || ART;
+	},
+
+	warnings: [],
+	
+	warn: function(str){
+		if (this.warnings.indexOf(str) == -1) this.warnings.push(str);
+	},
+	
+	parse: function(node){
+		var parser = this['parse' + node.typename];
+		if (!parser){
+			if (node && typeof node.length == 'number') return this.parseArray(node);
+			this.warn('A ' + node.typename + ' cannot be converted to ART.');
+			return null;
+		}
+		return parser.call(this, node);
+	},
+
+	parseArray: function(items){
+		if (items.length === 1)  return this.parse(items[0]);
+		var group = new this.art.Group();
+		var i = items.length;
+		while (i--){
+			var child = this.parse(items[i]);
+			if (child){
+				if (child.children && (items[i].opacity == null || items[i].opacity >= 100))
+					group.grab.apply(group, child.children); // Avoids unnecessary nesting but is no longer loss-less
+				else
+					child.inject(group);
+			}
+		}
+		return group;
+	},
+
+	parseDocument: function(doc){
+		// Merge all groups (only way to get correct sub-layer order?)
+		var allItems = Array.slice(doc.pageItems).filter(function(item){ return item.typename != 'GroupItem' && item.parent.typename != 'CompoundPathItem'; });
+		return this.parseArray(allItems);
+		
+		/*
+		var root = new this.art(coordwidth, coordheight);
+		var layers = doc.layers, i = layers.length;
+		while (i--) this.parseLayer(layers[i]).inject(root);
+		return root;
+		*/
+	},
+
+	parseLayer: function(layer){
+		var items = Array.slice(layer.pageItems).concat(Array.slice(layer.layers)); // Not correct sub-layer order
+		var group = this.parseArray(items);
+		group.name = layer.name;
+		return this.setBlend(group, layer);
+	},
+	
+	parseGroupItem: function(group){
+		var g;
+		if (group.clipped){
+			this.warn('ART doesn\'t support clipping masks.');
+			g = this.parseArray(Array.slice(group.pageItems, 1));
+		}
+		else {
+			g = this.parseArray(group.pageItems);
+		}
+		return this.setBlend(g, group);
+	},
+	
+	parseCompoundPathItem: function(cpath){
+		var p = new ART.Path(), items = cpath.pathItems;
+		for (var i = 0, l = items.length; i < l; i++)
+			this.addPathPoints(p, items[i]);
+		var shape = new this.art.Shape(p);
+		this.setBlend(shape, cpath);
+		return this.setColors(shape, cpath);
+	},
+	
+	parsePathItem: function(path){
+		var shape = new this.art.Shape(this.addPathPoints(new ART.Path(), path));
+		this.setBlend(shape, path);
+		return this.setColors(shape, path);
+	},
+
+	addPathPoints: function(path, item){
+		var points = item.pathPoints, l = points.length;
+		if (!l) return path;
+		
+		var x = this.alignX, y = this.alignY,
+		    point = points[0], lastPoint;
+
+		path.push('M', x(point.anchor[0]), y(point.anchor[1]));
+		for (var i = 1; i < l; i++){
+			lastPoint = point;
+			point = points[i];
+			// TODO: Optimize by using one of the shorter declarations when available
+			path.push('C', x(lastPoint.rightDirection[0]), y(lastPoint.rightDirection[1]), x(point.leftDirection[0]), y(point.leftDirection[1]), x(point.anchor[0]), y(point.anchor[1]));
+		}
+		if (item.closed){
+			lastPoint = point;
+			point = points[0];
+			path.push('C', x(lastPoint.rightDirection[0]), y(lastPoint.rightDirection[1]), x(point.leftDirection[0]), y(point.leftDirection[1]), x(point.anchor[0]), y(point.anchor[1]));
+			path.close();
+		}
+		return path;
+	},
+
+	setColors: function(shape, item){
+		this.setFill(shape, item);
+		this.setStroke(shape, item);
+		return shape;
+	},
+
+	setBlend: function(node, item){
+		if (item.opacity < 100) node.setOpacity(item.opacity / 100);
+		return node;
+	},
+
+	setFill: function(node, item){
+		var pitem = item.typename == 'CompoundPathItem' ? item.pathItems[0] : item;
+		if (!pitem.filled) return;
+		var color = pitem.fillColor;
+		if (color.typename == 'GradientColor') return this.setGradient(node, item);
+		var c = this.parseColor(color);
+		if (c == null){
+			this.warn('Unsupported fill color type: ' + color.typename);
+			return node;
+		}
+		node.fill(c);
+		return node;
+	},
+
+	setGradient: function(node, item){
+		/*
+		GRADIENT COLOR
+		angle number (double) The gradient vector angle in degrees. Default: 0.0
+		hiliteAngle number (double) The gradient highlight vector angle in degrees.
+		hiliteLength number (double) The gradient highlight vector length.
+		length number (double) The gradient vector length.
+		matrix Matrix An additional transformation matrix to manipulate the gradient path.
+		origin array of 2 numbers The gradient vector origin, the center point of the gradient in this color.
+		*/
+		var color = item.typename == 'CompoundPathItem' ? item.pathItems[0].fillColor : item.fillColor;
+
+		var stops = {}, gstops = color.gradient.gradientStops;
+		for (var i = 0, l = gstops.length; i < l; i++){
+			var gstop = gstops[i],
+				midPoint = gstop.midPoint,
+				stopColor = this.parseColor(gstop.color, gstop.opacity);
+			stops[gstop.rampPoint / 100] = stopColor.toExpression();
+			if (i < l - 1 && (midPoint < 45 || midPoint > 55)){
+				var nextStop = gstops[i + 1],
+					nextRamp = nextStop.rampPoint,
+					midRamp = (((nextRamp + gstop.rampPoint) * midPoint) + gstop.rampPoint) / 100,
+					nextColor = this.parseColor(nextStop.color, nextStop.opacity);
+				stops[midRamp] = this.getIntermediateColor(stopColor, nextColor, midPoint);
+			}
+		}
+
+		// TODO: Matrix transformation
+		
+		if (color.gradient.type == GradientType.RADIAL){
+			var bounds = item.geometricBounds;
+			var sx = bounds[2] - bounds[0], sy = bounds[3] - bounds[1],
+				cx = (color.origin[0] - bounds[0]) / sx,
+				cy = (color.origin[1] - bounds[1]) / sy,
+				rx = color.length / sx,
+				ry = color.length / sy,
+				a = color.hiliteAngle * Math.PI / 180,
+				l = color.hiliteLength,
+				fx = cx + (Math.cos(a) * l * rx),
+				fy = cy + (Math.sin(a) * l * ry);
+			// TODO: Fix it
+			node.fillRadial(stops, fx, fy, Math.abs(rx), cx, cy);
+		} else {
+			// TODO: Offset linear stops based on positioning
+			node.fillLinear(stops, color.angle);
+		}
+		return node;
+	},
+
+	setStroke: function(node, item){
+		if (item.typename == 'CompoundPathItem') item = item.pathItems[0];
+		if (!item.stroked) return node;
+		var color = this.parseColor(item.strokeColor);
+		if (color == null){
+			this.warn('Unsupported stroke color type: ' + item.strokeColor.typename);
+			return node;
+		}
+
+		var cap = item.strokeCap == StrokeCap.BUTTENDCAP ? 'butt' : (item.strokeCap == StrokeCap.PROJECTINGENDCAP ? 'square' : 'round'),
+		    join = item.strokeJoin == StrokeJoin.MITERENDJOIN ? 'miter' : (item.strokeJoin == StrokeJoin.BEVELENDJOIN ? 'bevel' : 'round');
+
+		node.stroke(color, item.strokeWidth, cap, join);
+		return node;
+	},
+
+	parseColor: function(color, opacity){
+		switch (color.typename){
+			case 'RGBColor':
+				return Color.rgb(Math.round(color.red), Math.round(color.green), Math.round(color.blue), opacity == null ? 1 : (opacity / 100));
+			case 'GrayColor':
+				var v = Math.round(255 - color.gray * 2.55);
+				return Color.rgb(v, v, v, opacity == null ? 1 : (opacity / 100));
+		}
+		return null;
+	},
+
+	getIntermediateColor: function(color1, color2, midPoint){
+		midPoint /= 100;
+		return Color.rgb(
+			((color2.red - color1.red) * midPoint) + color1.red,
+			((color2.green - color1.green) * midPoint) + color1.green,
+			((color2.blue - color1.blue) * midPoint) + color1.blue,
+			((color2.alpha - color1.alpha) * midPoint) + color1.alpha
+		);
+	}
+
+}).extend({
+	
+	getBoundsFromArray: function(arr){
+		if (!arr.length) return [0, 0, 0, 0];
+		var bounds = Array.slice(arr[0].visibleBounds),
+			xm = bounds[0] < bounds[2] ? 1 : -1,
+		    ym = bounds[1] < bounds[3] ? 1 : -1;
+		var i = arr.length;
+		while (--i){
+			var coords = arr[i].visibleBounds;
+			if (coords[0] * xm < bounds[0] * xm) bounds[0] = coords[0];
+			if (coords[1] * ym < bounds[1] * ym) bounds[1] = coords[1];
+			if (coords[2] * xm > bounds[2] * xm) bounds[2] = coords[2];
+			if (coords[3] * ym > bounds[3] * ym) bounds[3] = coords[3];
+		}
+		return bounds;
+	}
+	
+});
+
+Color.prototype.toExpression = Color.prototype.toHEX;

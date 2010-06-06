@@ -1,0 +1,620 @@
+﻿/*
+---
+name: Color
+description: Class to create and manipulate colors. Includes HSB «-» RGB «-» HEX conversions. Supports alpha for each type.
+requires: [Core/Type, Core/Array]
+provides: Color
+...
+*/
+
+var Color;
+
+(function(){
+
+var colors = {
+	maroon: '#800000', red: '#ff0000', orange: '#ffA500', yellow: '#ffff00', olive: '#808000',
+	purple: '#800080', fuchsia: "#ff00ff", white: '#ffffff', lime: '#00ff00', green: '#008000',
+	navy: '#000080', blue: '#0000ff', aqua: '#00ffff', teal: '#008080',
+	black: '#000000', silver: '#c0c0c0', gray: '#808080'
+};
+
+Color = function(color, type){
+	
+	if (color.isColor){
+		
+		this.red = color.red;
+		this.green = color.green;
+		this.blue = color.blue;
+		this.alpha = color.alpha;
+
+	} else {
+		
+		var namedColor = colors[color];
+		if (namedColor){
+			color = namedColor;
+			type = 'hex';
+		}
+
+		switch (typeof color){
+			case 'string': if (!type) type = (type = color.match(/^rgb|^hsb/)) ? type[0] : 'hex'; break;
+			case 'object': type = type || 'rgb'; color = color.toString(); break;
+			case 'number': type = 'hex'; color = color.toString(16); break;
+		}
+
+		color = Color['parse' + type.toUpperCase()](color);
+		this.red = color[0];
+		this.green = color[1];
+		this.blue = color[2];
+		this.alpha = color[3];
+	}
+	
+	this.isColor = true;
+
+};
+
+var limit = function(number, min, max){
+	return Math.min(max, Math.max(min, number));
+};
+
+var listMatch = /([-.\d]+)\s*,\s*([-.\d]+)\s*,\s*([-.\d]+)\s*,?\s*([-.\d]*)/;
+var hexMatch = /^#?([a-f0-9]{1,2})([a-f0-9]{1,2})([a-f0-9]{1,2})([a-f0-9]{0,2})$/i;
+
+Color.parseRGB = function(color){
+	return color.match(listMatch).slice(1).map(function(bit, i){
+		return (i < 3) ? Math.round(((bit %= 256) < 0) ? bit + 256 : bit) : limit(((bit === '') ? 1 : Number(bit)), 0, 1);
+	});
+};
+	
+Color.parseHEX = function(color){
+	if (color.length == 1) color = color + color + color;
+	return color.match(hexMatch).slice(1).map(function(bit, i){
+		if (i == 3) return (bit) ? parseInt(bit, 16) / 255 : 1;
+		return parseInt((bit.length == 1) ? bit + bit : bit, 16);
+	});
+};
+	
+Color.parseHSB = function(color){
+	var hsb = color.match(listMatch).slice(1).map(function(bit, i){
+		if (i === 0) return Math.round(((bit %= 360) < 0) ? (bit + 360) : bit);
+		else if (i < 3) return limit(Math.round(bit), 0, 100);
+		else return limit(((bit === '') ? 1 : Number(bit)), 0, 1);
+	});
+	
+	var a = hsb[3];
+	var br = Math.round(hsb[2] / 100 * 255);
+	if (hsb[1] == 0) return [br, br, br, a];
+		
+	var hue = hsb[0];
+	var f = hue % 60;
+	var p = Math.round((hsb[2] * (100 - hsb[1])) / 10000 * 255);
+	var q = Math.round((hsb[2] * (6000 - hsb[1] * f)) / 600000 * 255);
+	var t = Math.round((hsb[2] * (6000 - hsb[1] * (60 - f))) / 600000 * 255);
+
+	switch (Math.floor(hue / 60)){
+		case 0: return [br, t, p, a];
+		case 1: return [q, br, p, a];
+		case 2: return [p, br, t, a];
+		case 3: return [p, q, br, a];
+		case 4: return [t, p, br, a];
+		default: return [br, p, q, a];
+	}
+};
+
+var toString = function(type, array){
+	if (array[3] != 1) type += 'a';
+	else array.pop();
+	return type + '(' + array.join(', ') + ')';
+};
+
+Color.prototype = {
+
+	toHSB: function(array){
+		var red = this.red, green = this.green, blue = this.blue, alpha = this.alpha;
+
+		var max = Math.max(red, green, blue), min = Math.min(red, green, blue), delta = max - min;
+		var hue = 0, saturation = (max != 0) ? delta / max : 0, brightness = max / 255;
+		if (saturation){
+			var rr = (max - red) / delta, gr = (max - green) / delta, br = (max - blue) / delta;
+			hue = (red == max) ? br - gr : (green == max) ? 2 + rr - br : 4 + gr - rr;
+			if ((hue /= 6) < 0) hue++;
+		}
+
+		var hsb = [Math.round(hue * 360), Math.round(saturation * 100), Math.round(brightness * 100), alpha];
+
+		return (array) ? hsb : toString('hsb', hsb);
+	},
+
+	toHEX: function(array){
+
+		var a = this.alpha;
+		var alpha = ((a = Math.round((a * 255)).toString(16)).length == 1) ? a + a : a;
+		
+		var hex = [this.red, this.green, this.blue].map(function(bit){
+			bit = bit.toString(16);
+			return (bit.length == 1) ? '0' + bit : bit;
+		});
+		
+		return (array) ? hex.concat(alpha) : '#' + hex.join('') + ((alpha == 'ff') ? '' : alpha);
+	},
+	
+	toRGB: function(array){
+		var rgb = [this.red, this.green, this.blue, this.alpha];
+		return (array) ? rgb : toString('rgb', rgb);
+	}
+
+};
+
+Color.prototype.toString = Color.prototype.toRGB;
+
+Color.hex = function(hex){
+	return new Color(hex, 'hex');
+};
+
+if (this.hex == null) this.hex = Color.hex;
+
+Color.hsb = function(h, s, b, a){
+	return new Color([h || 0, s || 0, b || 0, (a == null) ? 1 : a], 'hsb');
+};
+
+if (this.hsb == null) this.hsb = Color.hsb;
+
+Color.rgb = function(r, g, b, a){
+	return new Color([r || 0, g || 0, b || 0, (a == null) ? 1 : a], 'rgb');
+};
+
+if (this.rgb == null) this.rgb = Color.rgb;
+
+if (this.Type) new Type('Color', Color);
+
+})();
+
+
+/*
+---
+name: Table
+description: LUA-Style table implementation.
+requires: [Core/Type, Core/Array]
+provides: Table
+...
+*/
+
+var Table;
+
+(function(){
+
+Table = function(){
+
+	this.length = 0;
+	var keys = [], values = [];
+	
+	this.set = function(key, value){
+		var index = keys.indexOf(key);
+		if (index == -1){
+			var length = keys.length;
+			keys[length] = key;
+			values[length] = value;
+			this.length++;
+		} else {
+			values[index] = value;
+		}
+		return this;
+	};
+
+	this.get = function(key){
+		var index = keys.indexOf(key);
+		return (index == -1) ? null : values[index];
+	};
+
+	this.erase = function(key){
+		var index = keys.indexOf(key);
+		if (index != -1){
+			this.length--;
+			keys.splice(index, 1);
+			return values.splice(index, 1)[0];
+		}
+		return null;
+	};
+
+	this.each = this.forEach = function(fn, bind){
+		for (var i = 0, l = this.length; i < l; i++) fn.call(bind, keys[i], values[i], this);
+	};
+	
+};
+
+if (Type) new Type('Table', Table);
+
+})();
+
+
+
+/*
+---
+name: ART
+description: "The heart of ART."
+requires: [Core/Class, Color/Color, Table/Table]
+provides: [ART, ART.Element, ART.Container]
+...
+*/
+
+var ART;
+
+(function(){
+
+ART = new Class;
+
+ART.version = '0.87';
+ART.build = '37db3609c6e0df4c215737df9c3c5851d1e9c30c';
+
+ART.Element = new Class({
+	
+	/* dom */
+
+	inject: function(element){
+		if (element.element) element = element.element;
+		element.appendChild(this.element);
+		return this;
+	},
+	
+	eject: function(){
+		var element = this.element, parent = element.parentNode;
+		if (parent) parent.removeChild(element);
+		return this;
+	},
+	
+	/* events */
+	
+	listen: function(type, fn){
+		if (!this._events) this._events = {};
+		
+		if (typeof type != 'string'){ // listen type / fn with object
+			for (var t in type) this.listen(t, type[t]);
+		} else { // listen to one
+			if (!this._events[type]) this._events[type] = new Table;
+			var events = this._events[type];
+			if (events.get(fn)) return this;
+			var bound = fn.bind(this);
+			events.set(fn, bound);
+			var element = this.element;
+			if (element.addEventListener) element.addEventListener(type, bound, false);
+			else element.attachEvent('on' + type, bound);
+		}
+
+		return this;
+	},
+	
+	ignore: function(type, fn){
+		if (!this._events) return this;
+		
+		if (typeof type != 'string'){ // ignore type / fn with object
+			for (var t in type) this.ignore(t, type[t]);
+			return this;
+		}
+		
+		var events = this._events[type];
+		if (!events) return this;
+		
+		if (fn == null){ // ignore every of type
+			events.each(function(fn, bound){
+				this.ignore(type, fn);
+			}, this);
+		} else { // ignore one
+			var bound = events.get(fn);
+			if (!bound) return this;
+			var element = this.element;
+			if (element.removeEventListener) element.removeEventListener(type, bound, false);
+			else element.detachEvent('on' + type, bound);
+		}
+
+		return this;
+	}
+
+});
+
+ART.Container = new Class({
+
+	grab: function(){
+		for (var i = 0; i < arguments.length; i++) arguments[i].inject(this);
+		return this;
+	}
+
+});
+
+var UID = 0;
+
+ART.uniqueID = function(){
+	return (new Date().getTime() + (UID++)).toString(36);
+};
+
+Color.detach = function(color){
+	color = new Color(color);
+	return [Color.rgb(color.red, color.green, color.blue).toString(), color.alpha];
+};
+
+})();
+
+
+
+/*
+---
+name: ART.Path
+description: "Class to generate a valid SVG path using method calls."
+authors: ["[Valerio Proietti](http://mad4milk.net)", "[Sebastian Markbåge](http://calyptus.eu/)"]
+provides: ART.Path
+requires: ART
+...
+*/
+
+(function(){
+
+/* private functions */
+
+var parse = function(path){
+
+	var parts = [], index = -1,
+	    bits = path.match(/[a-df-z]|[\-+]?(?:[\d\.]e[\-+]?|[^\s\-+,a-z])+/ig);
+
+	for (var i = 0, l = bits.length; i < l; i++){
+		var bit = bits[i];
+		if (bit.match(/^[a-z]/i)) parts[++index] = [bit];
+		else parts[index].push(Number(bit));
+	}
+	
+	return parts;
+
+};
+
+var circle = Math.PI * 2, north = circle / 2, west = north / 2, east = -west, south = 0;
+
+var calculateArc = function(rx, ry, rotation, large, clockwise, x, y, tX, tY){
+	var cx = x / 2, cy = y / 2,
+		rxry = rx * rx * ry * ry, rycx = ry * ry * cx * cx, rxcy = rx * rx * cy * cy,
+		a = rxry - rxcy - rycx;
+
+	if (a < 0){
+		a = Math.sqrt(1 - a / rxry);
+		rx *= a; ry *= a;
+	} else {
+		a = Math.sqrt(a / (rxcy + rycx));
+		if (large == clockwise) a = -a;
+		cx += -a * y / 2 * rx / ry;
+		cy +=  a * x / 2 * ry / rx;
+	}
+
+	var sa = Math.atan2(cx, -cy), ea = Math.atan2(-x + cx, y - cy);
+	if (!+clockwise){ var t = sa; sa = ea; ea = t; }
+	if (ea < sa) ea += circle;
+
+	cx += tX; cy += tY;
+
+	return {
+		circle: [cx - rx, cy - ry, cx + rx, cy + ry],
+		boundsX: [
+			ea > circle + west || (sa < west && ea > west) ? cx - rx : tX,
+			ea > circle + east || (sa < east && ea > east) ? cx + rx : tX
+		],
+		boundsY: [
+			ea > north ? cy - ry : tY,
+			ea > circle + south || (sa < south && ea > south) ? cy + ry : tY
+		]
+	};
+};
+
+var extrapolate = function(parts, precision){
+	
+	var boundsX = [], boundsY = [];
+	
+	var ux = (precision != null) ? function(x){
+		boundsX.push(x); return Math.round(x * precision);
+	} : function(x){
+		boundsX.push(x); return x;
+	}, uy = (precision != null) ? function(y){
+		boundsY.push(y); return Math.round(y * precision);
+	} : function(y){
+		boundsY.push(y); return y;
+	}, np = (precision != null) ? function(v){
+		return Math.round(v * precision);
+	} : function(v){
+		return v;
+	};
+
+	var reflect = function(sx, sy, ex, ey){
+		return [ex * 2 - sx, ey * 2 - sy];
+	};
+	
+	var X = 0, Y = 0, px = 0, py = 0, r;
+	
+	var path = '', inX, inY;
+	
+	for (i = 0; i < parts.length; i++){
+		var v = Array.slice(parts[i]), f = v.shift(), l = f.toLowerCase();
+		var refX = l == f ? X : 0, refY = l == f ? Y : 0;
+		
+		if (l != 'm' && inX == null){
+			inX = X; inY = Y;
+		}
+
+		switch (l){
+			
+			case 'm':
+				path += 'm' + ux(X = refX + v[0]) + ',' + uy(Y = refY + v[1]);
+			break;
+			
+			case 'l':
+				path += 'l' + ux(X = refX + v[0]) + ',' + uy(Y = refY + v[1]);
+			break;
+			
+			case 'c':
+				px = refX + v[2]; py = refY + v[3];
+				path += 'c' + ux(refX + v[0]) + ',' + uy(refY + v[1]) + ',' + ux(px) + ',' + uy(py) + ',' + ux(X = refX + v[4]) + ',' + uy(Y = refY + v[5]);
+			break;
+
+			case 's':
+				r = reflect(px, py, X, Y);
+				px = refX + v[0]; py = refY + v[1];
+				path += 'c' + ux(r[0]) + ',' + uy(r[1]) + ',' + ux(px) + ',' + uy(py) + ',' + ux(X = refX + v[2]) + ',' + uy(Y = refY + v[3]);
+			break;
+			
+			case 'q':
+				px = refX + v[0]; py = refY + v[1];
+				path += 'c' + ux(refX + v[0]) + ',' + uy(refY + v[1]) + ',' + ux(px) + ',' + uy(py) + ',' + ux(X = refX + v[2]) + ',' + uy(Y = refY + v[3]);
+			break;
+			
+			case 't':
+				r = reflect(px, py, X, Y);
+				px = refX + r[0]; py = refY + r[1];
+				path += 'c' + ux(px) + ',' + uy(py) + ',' + ux(px) + ',' + uy(py) + ',' + ux(X = refX + v[0]) + ',' + uy(Y = refY + v[1]);
+			break;
+
+			case 'a':
+				px = refX + v[5]; py = refY + v[6];
+
+				if (!+v[0] || !+v[1] || (px == X && py == Y)){
+					path += 'l' + ux(X = px) + ',' + uy(Y = py);
+					break;
+				}
+				
+				v[7] = X; v[8] = Y;
+				r = calculateArc.apply(null, v);
+
+				boundsX.push.apply(boundsX, r.boundsX);
+				boundsY.push.apply(boundsY, r.boundsY);
+
+				path += (v[4] == 1 ? 'wa' : 'at') + r.circle.map(np) + ',' + ux(X) + ',' + uy(Y) + ',' + ux(X = px) + ',' + uy(Y = py);
+			break;
+
+			case 'h':
+				path += 'l' + ux(X = refX + v[0]) + ',' + uy(Y);
+			break;
+			
+			case 'v':
+				path += 'l' + ux(X) + ',' + uy(Y = refY + v[0]);
+			break;
+			
+			case 'z':
+				path += 'x';
+				if (inX != null){
+					path += 'm' + ux(X = inX) + ',' + uy(Y = inY);
+					inX = null;
+				}
+			break;
+			
+		}
+	}
+	
+	var right = Math.max.apply(Math, boundsX),
+		bottom = Math.max.apply(Math, boundsY),
+		left = Math.min.apply(Math, boundsX),
+		top = Math.min.apply(Math, boundsY),
+		height = bottom - top,
+		width = right - left;
+	
+	return [path, {left: left, top: top, right: right, bottom: bottom, width: width, height: height}];
+
+};
+
+/* Path Class */
+
+ART.Path = new Class({
+	
+	initialize: function(path){
+		if (path instanceof ART.Path){ //already a path, copying
+			this.path = Array.slice(path.path);
+			this.box = path.box;
+			this.vml = path.vml;
+			this.svg = path.svg;
+		} else {
+			this.path = (path == null) ? [] : parse(path);
+			this.box = null;
+			this.vml = null;
+			this.svg = null;
+		}
+
+		return this;
+	},
+	
+	push: function(){ //modifying the current path resets the memoized values.
+		this.box = null;
+		this.vml = null;
+		this.svg = null;
+		this.path.push(Array.slice(arguments));
+		return this;
+	},
+	
+	reset: function(){
+		this.box = null;
+		this.vml = null;
+		this.svg = null;
+		this.path = [];
+		return this;
+	},
+	
+	/*utility*/
+	
+	move: function(x, y){
+		return this.push('m', x, y);
+	},
+	
+	line: function(x, y){
+		return this.push('l', x, y);
+	},
+	
+	close: function(){
+		return this.push('z');
+	},
+	
+	bezier: function(c1x, c1y, c2x, c2y, ex, ey){
+		return this.push('c', c1x, c1y, c2x, c2y, ex, ey);
+	},
+	
+	arc: function(x, y, rx, ry, large){
+		return this.push('a', Math.abs(rx || x), Math.abs(ry || rx || y), 0, large ? 1 : 0, 1, x, y);
+	},
+	
+	counterArc: function(x, y, rx, ry, large){
+		return this.push('a', Math.abs(rx || x), Math.abs(ry || rx || y), 0, large ? 1 : 0, 0, x, y);
+	},
+	
+	/* transformation, measurement */
+	
+	toSVG: function(){
+		if (this.svg == null){
+			var path = '';
+			for (var i = 0, l = this.path.length; i < l; i++) path += this.path[i].join(' ');
+			this.svg = path;
+		}
+		return this.svg;
+	},
+	
+	toVML: function(precision){
+		if (this.vml == null){
+			var data = extrapolate(this.path, precision);
+			this.box = data[1];
+			this.vml = data[0];
+		}
+		return this.vml;
+	},
+	
+	measure: function(precision){
+		if (this.box == null){
+					
+			if (this.path.length){
+				var data = extrapolate(this.path, precision);
+				this.box = data[1];
+				this.vml = data[2];
+			} else {
+				this.box = {left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0};
+				this.vml = '';
+				this.svg = '';
+			}
+		
+		}
+		
+		return this.box;
+	}
+	
+});
+
+ART.Path.prototype.toString = ART.Path.prototype.toSVG;
+
+})();
+

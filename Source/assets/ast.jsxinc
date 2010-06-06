@@ -1,0 +1,547 @@
+var AST = new Class();
+
+AST.Statement = new Class({
+
+	initialize: function(label){
+		this.label = label;
+	},
+
+	writeTo: function(compressed){ },
+
+	toString: function(compressed){
+		var output = [];
+		this.writeTo(function(str){
+			output.push(str);
+		}, compressed);
+		return output.join('');
+	}
+
+});
+
+AST.Return = new Class({
+
+	Extends: AST.Statement,
+
+	initialize: function(expr){
+		if (arguments.length) this.expression = AST.Expression(expr);
+	},
+
+	writeTo: function(write, format){
+		write('return');
+		if (!this.expression) return;
+		write(' ');
+		this.expression.writeTo(write, format);
+	}
+
+});
+
+AST.Break = new Class({
+
+	Extends: AST.Statement,
+
+	writeTo: function(write, format){
+		write('break');
+	}
+
+});
+
+AST.Expression = new Class({
+
+	Extends: AST.Statement,
+	
+	cast: function(obj){
+		if (obj && typeof obj.toExpression == 'function') obj = obj.toExpression();
+		return obj instanceof AST.Expression ? obj : new AST.Literal(obj);
+	}
+
+});
+
+AST.Block = new Class({
+
+	initialize: function(){
+		this.statements = Array.slice(arguments);
+	},
+	
+	cast: function(obj){
+		if (obj instanceof AST.Block) return obj;
+		var block = new AST.Block();
+		if (Object.prototype.toString.call(obj) == '[object Array]')
+			block.statements = Array.slice(obj);
+		else
+			block.statements = [obj];
+		return block;
+	},
+
+	writeTo: function(writer, format, curly){
+		var body = this.statements;
+		if (!body || !body.length) return;
+		for (var i = 0, l = body.length; i < l; i++){
+			var expr = body[i];
+			if (!(expr instanceof AST.Statement)) body[i] = expr = new AST.Literal(expr);
+			expr.writeTo(writer, format);
+			writer(';\n');
+		}
+	},
+
+	toString: function(format){
+		var output = [];
+		this.writeTo(function(str){
+			output.push(str);
+		}, format);
+		return output.join('');
+	}
+
+});
+
+AST.implement({ Extends: AST.Block });
+
+(function(){
+
+// Based on the MooTools JSON implementation
+
+var specialChars = {'\b': '\\b', '\t': '\\t', '\n': '\\n', '\f': '\\f', '\r': '\\r', '"' : '\\"', '\\': '\\\\'},
+
+	escapable = new RegExp('[\x00-\x1f\\"]', 'g'), // RegExp Literal doesn't work in ExtendScript
+
+    replaceChars = function(chr){
+		return specialChars[chr] || '\\u00' + Math.floor(chr.charCodeAt() / 16).toString(16) + (chr.charCodeAt() % 16).toString(16);
+	},
+
+    encode = function(write, obj, format){
+		if (obj === null){
+			write('null');
+			return;
+		}
+		if (typeof obj.toExpression == 'function')
+		{
+			obj = obj.toExpression();
+		}
+		if (obj instanceof AST.Expression){
+			obj.writeTo(write, format);
+			return;
+		}
+		if (typeof obj == 'string'){
+			//alert(obj + '||' + obj.charCodeAt(0));
+			write('"' + obj.replace(escapable, replaceChars) + '"');
+			return;
+		}
+		if (typeof obj == 'object' && Object.prototype.toString.call(obj) != '[object RegExp]'){
+
+			var first = true;
+			
+			if (Object.prototype.toString.call(obj) == '[object Array]'){
+
+				write('[');
+				for (var i = 0, l = obj.length; i < l; i++){
+					if (!Object.hasOwnProperty.call(obj, key)) continue;
+					if (first) first = false; else write(', ');
+					encode(write, obj, format);
+				}
+				write(']');
+
+			} else {
+
+				write('{');
+				for (var key in obj){
+					if (!Object.hasOwnProperty.call(obj, key)) continue;
+					if (first) first = false; else write(', ');
+					encode(write, key, format);
+					write(': ');
+					encode(write, obj[key], format);
+				}
+				write('}');
+			}
+			
+			return;
+		}
+
+		write(String(obj));
+	};
+
+AST.Literal = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(value){
+		this.value = value;
+	},
+
+	writeTo: function(writer, format){
+		encode(writer, this.value, format);
+	}
+
+});
+
+})();
+
+(function(){
+
+AST.Operator = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(left, operator, right){
+		this.left = AST.Expression(left);
+		this.operator = operator;
+		this.right = AST.Expression(right);
+	},
+
+	writeTo: function(write, format){
+		this.left.writeTo(write, format);
+		write(' ' + this.operator + ' ');
+		this.right.writeTo(write, format);
+	}
+
+});
+
+AST.Not = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(expr){
+		this.expression = expr;
+	},
+
+	writeTo: function(write, format){
+		write('!');
+		this.expression.writeTo(write, format);
+	}
+
+});
+
+AST.Expression.implement('not', function(){
+	return new AST.Not(this);
+});
+
+var operators = {
+
+	Equals: '==',
+	NotEquals: '!=',
+	StrictEquals: '===',
+	StrictNotEquals: '!==',
+	LessThan: '<',
+	MoreThan: '>',
+	LessThanOrEquals: '<=',
+	MoreThanOrEquals: '>=',
+
+	And: '&&',
+	Or: '||',
+
+	BitwiseAnd: '&',
+	BitwiseOr: '|',
+	BitwiseXor: '^',
+	
+	LeftShift: '<<',
+	RightShift: '>>',
+	ZeroFillRightShift: '>>>',
+
+	Add: '+',
+	Subtract: '-',
+	Multiply: '*',
+	Divide: '/',
+	Mod: '%'
+
+};
+
+for (var key in operators) (function(name, cname, op){
+
+	AST[name] = new Class({
+
+		Extends: AST.Operator,
+
+		initialize: function(left, right){
+			this.parent(left, op, right);
+		}
+
+	});
+
+	AST.Expression.implement(cname, function(expr){
+		return new AST[name](this, expr);
+	});
+
+})(key, key.substr(0, 1).toLowerCase() + key.substr(1), operators[key]);
+
+})();
+
+AST.Variable = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(name){
+		this.name = name;
+	},
+
+	writeTo: function(write){
+		write(this.name);
+	}
+
+});
+
+AST.This = new Class({
+
+	Extends: AST.Expression,
+
+	writeTo: function(write){
+		write('this');
+	}
+
+});
+
+AST.Property = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(expr, name){
+		this.expression = AST.Expression(expr);
+		this.name = AST.Expression(name);
+	},
+
+	writeTo: function(write, format){
+		this.expression.writeTo(write, format);
+		if (this.name instanceof AST.Literal && this.name.value){
+			write('.');
+			write(String(this.name.value));
+			return;
+		}
+		write('[');
+		this.name.writeTo(write, format);
+		write(']');
+	}
+
+});
+
+AST.Expression.implement('property', function(name){
+
+	return new AST.Property(this, name);
+
+});
+
+(function(){
+
+var err = 'Assignment is only possible on variables or properties.',
+	posterr = 'Only the literal 1 is possible for post assignments.',
+	assignableOps = /[\+\-\*\/\%]/;
+
+AST.Assignment = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(left, right){
+		if (!(left instanceof AST.Variable || left instanceof AST.Property)) throw new Error(err);
+		this.left = left;
+		this.right = AST.Expression(right);
+	},
+
+	writeTo: function(writer, format){
+		var left = this.left, right = this.right;
+
+		left.writeTo(writer, format);
+
+		if (right instanceof AST.Operator && right.left === left && assignableOps.test(right.operator)){
+			if (right.right instanceof AST.Literal && right.right.value == 1){
+				if (right.operator == '+'){
+					writer('++');
+					return;
+				} else if (right.operator == '-'){
+					writer('--');
+					return;
+				}
+			}
+			writer(' ' + right.operator + '= ');
+			right = right.right;
+		} else {
+			writer(' = ');
+		}
+		right.writeTo(writer, format);
+	}
+
+});
+
+AST.PostAssignment = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(left, right, operator){
+		if (!(left instanceof AST.Variable || left instanceof AST.Property)) throw new Error(err);
+		this.left = left;
+		this.operator = operator;
+		this.right = AST.Expression(right);
+		if (!(this.right instanceof AST.Operator) || this.right.left !== left || !(this.right.right instanceof AST.Literal) || this.right.right.value != 1) throw new Error(posterr);
+	},
+
+	writeTo: function(writer, format){
+		this.expression.writeTo(writer, format);
+		writer(this.operator + this.operator);
+	}
+
+});
+
+AST.Expression.implement('assignTo', function(expr){
+	return new AST.Assignment(expr, this);
+});
+
+var methods = {
+
+	assign: function(expr){
+		return new AST.Assignment(this, expr);
+	},
+
+	increment: function(){
+		return new AST.Assignment(this, new AST.Add(this, 1));
+	},
+	
+	decrement: function(){
+		return new AST.Assignment(this, new AST.Subtract(this, 1));
+	},
+	
+	postIncrement: function(){
+		return new AST.PostAssignment(this, new AST.Add(this, 1));
+	},
+
+	postDecrement: function(){
+		return new AST.PostAssignment(this, new AST.Subtract(this, 1));
+	}
+
+};
+
+AST.Variable.implement(methods);
+AST.Property.implement(methods);
+
+})();
+
+AST.Ternary = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(condition, then, els){
+		this.condition = AST.Expression(condition);
+		this.then = AST.Expression(then);
+		this.els = AST.Expression(els);
+	},
+
+	writeTo: function(write, format){
+		this.condition.writeTo(write, format);
+		write(' ? ');
+		this.then.writeTo(write, format);
+		write(' : ');
+		this.els.writeTo(write, format);
+	}
+
+});
+
+AST.If = new Class({
+
+	Extends: AST.Statement,
+
+	initialize: function(condition, then, els){
+		this.condition = condition;
+		this.then = then;
+		this.els = els;
+	},
+
+	writeTo: function(write, format){
+		write('if (');
+		this.condition.writeTo(write, format);
+		write(')');
+		this.then.writeTo(write, format);
+		if (this.els){
+			write(' else ');
+			this.els.writeTo(write, format);
+		}
+	}
+
+});
+
+AST.Function = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(name, args, variables, statements){
+		if (typeof name != 'string'){
+			statements = variables;
+			variables = args;
+			args = name;
+			name = null;
+		}
+		if (statements instanceof AST.Expression) statements = new AST.Return(statements);
+		statements = AST.Block(statements);
+		this.name = name;
+		this.arguments = args;
+		this.statements = statements;
+		this.variables = variables;
+	},
+
+	writeTo: function(write, format){
+		write(this.name ? 'function ' + this.name + '(' : 'function(');
+		if (this.arguments){
+			for (var i = 0, l = this.arguments.length; i < l; i++){
+				if (i > 0) write(', ');
+				write(this.arguments[i].name);
+			}
+		}
+		write('){\n');
+		this.statements.writeTo(write, format);
+		write('}');
+	},
+
+	compile: function(){
+		var args = this.arguments.map(function(arg){ return arg.name; }),
+			body = [];
+
+		this.statements.writeTo(function(str){ body.push(str); });
+		args.push(body.join(''));
+
+		return Function.apply(Function, args);
+	}
+
+});
+
+AST.Call = new Class({
+
+	Extends: AST.Expression,
+
+	initialize: function(expr, args){
+		this.expression = AST.Expression(expr);
+		this.arguments = Array.map(args, function(v){
+			return AST.Expression(v);
+		});
+	},
+
+	writeTo: function(write, format){
+		this.expression.writeTo(write, format);
+		write('(');
+		var args = this.arguments;
+		if (args.length > 0){
+			args[0].writeTo(write, format);
+			for (var i = 1, l = args.length; i < l; i++){
+				write(', ');
+				args[i].writeTo(write, format);
+			}
+		}
+		write(')');
+	}
+
+});
+
+AST.New = new Class({
+
+	Extends: AST.Call,
+
+	writeTo: function(write, format){
+		write('new ');
+		this.parent(write, format);
+	}
+
+});
+
+AST.Expression.implement({
+
+	call: function(){
+		return new AST.Call(this, arguments);
+	},
+
+	construct: function(){
+		return new AST.New(this, arguments);
+	}
+
+});

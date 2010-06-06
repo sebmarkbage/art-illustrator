@@ -1,0 +1,154 @@
+﻿#include "assets/mootools-with-cast-and-strict-patch.jsxinc"
+#include "assets/ast.jsxinc"
+#include "assets/art-pre-base.jsxinc"
+
+// TODO
+
+(function(){
+
+// ART Base Class
+
+ART.Illustrator = new Class({
+
+	Extends: ART.Element,
+	Implements: ART.Container,
+
+	initialize: function(width, height){
+		this.resize(width, height);
+		this.children = [];
+	},
+
+	resize: function(width, height){
+		this.width = width;
+		this.height = height;
+		return this;
+	}
+
+});
+
+// ART Element Class
+
+ART.Illustrator.Element = new Class({
+	
+	Extends: ART.Element,
+
+	initialize: function(){
+	},
+
+	// insertions
+	
+	inject: function(container){
+		this.eject();
+		if (container.children) container.children.push(this);
+		this.container = container;
+		return this;
+	},
+	
+	eject: function(){
+		if (this.container && this.container.children) this.container.children.erase(this);
+		this.container = null;
+		return this;
+	},
+	
+	// transforms
+	
+	rotate: function(deg, x, y){ return this; },
+
+	scale: function(x, y){ return this; },
+
+	translate: function(x, y){ return this; },
+	
+	setOpacity: function(opacity){ return this; },
+
+	// visibility
+	
+	hide: function(){ return this; },
+	
+	show: function(){ return this; },
+	
+	// ignore
+	
+	listen: function(){
+		return this;
+	},
+	
+	ignore: function(){
+		return this;
+	}
+	
+});
+
+// ART Group Class
+
+ART.Illustrator.Group = new Class({
+
+	Extends: ART.Illustrator.Element,
+	Implements: ART.Container,
+
+	initialize: function(){
+		this.parent();
+		this.children = [];
+	},
+
+	measure: function(){
+		return ART.Path.measure(this.children.map(function(child){
+			return child.currentPath;
+		}));
+	}
+
+});
+
+// ART Base Shape Class
+
+ART.Illustrator.Base = new Class({
+	
+	Extends: ART.Illustrator.Element,
+
+	/* styles */
+	
+	fill: function(color){ return this; },
+
+	fillRadial: function(stops, focusX, focusY, radius, centerX, centerY){ return this; },
+
+	fillLinear: function(stops, angle){ return this; },
+
+	stroke: function(color, width, cap, join){ return this; }
+	
+});
+
+// ART Shape Class
+
+ART.Illustrator.Shape = new Class({
+	
+	Extends: ART.Illustrator.Base,
+	
+	initialize: function(path){
+		this.parent('path');
+		if (path != null) this.draw(path);
+	},
+	
+	getPath: function(){
+		return this.currentPath || new ART.Path;
+	},
+	
+	draw: function(path){
+		this.currentPath = (path instanceof ART.Path) ? path : new ART.Path(path);
+		return this;
+	},
+	
+	measure: function(){
+		return this.getPath().measure();
+	}
+
+});
+
+})();
+
+// ART.Base.Illustrator
+// This is silly, we need a way to select output mode. Even for inherited types.
+
+ART.Shape = new Class({Extends: ART.Illustrator.Shape});
+ART.Group = new Class({Extends: ART.Illustrator.Group});
+ART.implement({Extends: ART.Illustrator});
+
+#include "assets/art-post-base.jsxinc"
